@@ -68,6 +68,16 @@ func (cli *Client) cancelResponse(reqID string, ch chan *waBinary.Node) {
 	cli.responseWaitersLock.Unlock()
 }
 
+// A response dispatcher may already hold ch after removing it from the map.
+// Leave the buffered channel open for that late ACK.
+func (cli *Client) dropRetryWaiter(reqID string, ch chan *waBinary.Node) {
+	cli.responseWaitersLock.Lock()
+	if cli.responseWaiters[reqID] == ch {
+		delete(cli.responseWaiters, reqID)
+	}
+	cli.responseWaitersLock.Unlock()
+}
+
 func (cli *Client) receiveResponse(ctx context.Context, data *waBinary.Node) bool {
 	id, ok := data.Attrs["id"].(string)
 	if !ok || (data.Tag != "iq" && data.Tag != "ack") {
@@ -196,9 +206,22 @@ func (cli *Client) retryFrame(
 	}
 
 	cli.Log.Debugf("%s (%s) was interrupted by websocket disconnection (%s), waiting for reconnect to retry...", id, reqType, origResp)
-	if !cli.WaitForConnection(5 * time.Second) {
+	if reqType == "message send" && cli.MessageRetryTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, cli.MessageRetryTimeout)
+		defer cancel()
+		if !cli.waitForConnection(ctx) {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, &DisconnectedError{Action: reqType, Node: origResp}
+		}
+	} else if !cli.WaitForConnection(5 * time.Second) {
 		cli.Log.Debugf("Websocket didn't reconnect within 5 seconds of failed %s (%s)", reqType, id)
 		return nil, &DisconnectedError{Action: reqType, Node: origResp}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	cli.socketLock.RLock()
@@ -208,10 +231,14 @@ func (cli *Client) retryFrame(
 		return nil, ErrNotConnected
 	}
 
+	return cli.sendRetriedFrame(ctx, reqType, id, data, sock.SendFrame, timeout)
+}
+
+func (cli *Client) sendRetriedFrame(ctx context.Context, reqType, id string, data []byte, send func(context.Context, []byte) error, timeout time.Duration) (*waBinary.Node, error) {
 	respChan := cli.waitResponse(id)
-	err := sock.SendFrame(ctx, data)
+	err := send(ctx, data)
 	if err != nil {
-		cli.cancelResponse(id, respChan)
+		cli.dropRetryWaiter(id, respChan)
 		return nil, err
 	}
 	var resp *waBinary.Node
@@ -222,8 +249,10 @@ func (cli *Client) retryFrame(
 	select {
 	case resp = <-respChan:
 	case <-ctx.Done():
+		cli.dropRetryWaiter(id, respChan)
 		return nil, ctx.Err()
 	case <-timeoutChan:
+		cli.dropRetryWaiter(id, respChan)
 		// FIXME this error isn't technically correct (but works for now - the timeout param is only used from sendIQ)
 		return nil, ErrIQTimedOut
 	}
