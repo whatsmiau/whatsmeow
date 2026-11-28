@@ -206,9 +206,13 @@ func (cli *Client) retryFrame(
 	}
 
 	cli.Log.Debugf("%s (%s) was interrupted by websocket disconnection (%s), waiting for reconnect to retry...", id, reqType, origResp)
-	if reqType == "message send" && cli.MessageRetryTimeout > 0 {
+	retryTimeout := cli.MessageRetryTimeout
+	if override := cli.messageRetryOverride.Load(); override != nil {
+		retryTimeout = *override
+	}
+	if reqType == "message send" && retryTimeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, cli.MessageRetryTimeout)
+		ctx, cancel = context.WithTimeout(ctx, retryTimeout)
 		defer cancel()
 		if !cli.waitForConnection(ctx) {
 			if ctx.Err() != nil {

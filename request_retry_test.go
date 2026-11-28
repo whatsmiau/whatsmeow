@@ -25,7 +25,7 @@ func TestMessageRetryWaitSharesCallerDeadline(t *testing.T) {
 	if _, err := client.retryFrame(ctx, "message send", "stable", nil, xmlStreamEndNode, 0); !errors.Is(err, context.Canceled) {
 		t.Fatalf("retry must respect cancellation without an open socket: %v", err)
 	}
-	client.MessageRetryTimeout = 10 * time.Millisecond
+	client.SetMessageRetryTimeout(10 * time.Millisecond)
 	if _, err := client.retryFrame(context.Background(), "message send", "stable", nil, xmlStreamEndNode, 0); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("retry must stop if reconnection never succeeds: %v", err)
 	}
