@@ -137,6 +137,11 @@ type Client struct {
 	appStateKeyRequests     map[string]time.Time
 	appStateKeyRequestsLock sync.RWMutex
 
+	// MessageRetryTimeout bounds reconnection, retransmission and ACK wait on
+	// the existing same-ID message retry. Set it before connecting the client.
+	// Zero preserves the default retry behavior.
+	MessageRetryTimeout time.Duration
+
 	messageSendLock sync.Mutex
 
 	tcTokenSenderTS            map[types.JID]time.Time
@@ -506,17 +511,22 @@ func (cli *Client) getMediaOrigin() string {
 }
 
 func (cli *Client) WaitForConnection(timeout time.Duration) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return cli.waitForConnection(ctx)
+}
+
+func (cli *Client) waitForConnection(ctx context.Context) bool {
 	if cli == nil {
 		return false
 	}
-	timeoutChan := time.After(timeout)
 	cli.socketLock.RLock()
 	for cli.socket == nil || !cli.socket.IsConnected() || !cli.IsLoggedIn() {
 		ch := cli.socketWait
 		cli.socketLock.RUnlock()
 		select {
 		case <-ch:
-		case <-timeoutChan:
+		case <-ctx.Done():
 			return false
 		case <-cli.expectedDisconnect.GetChan():
 			return false
