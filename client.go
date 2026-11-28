@@ -139,8 +139,10 @@ type Client struct {
 
 	// MessageRetryTimeout bounds reconnection, retransmission and ACK wait on
 	// the existing same-ID message retry. Set it before connecting the client.
-	// Zero preserves the default retry behavior.
-	MessageRetryTimeout time.Duration
+	// Zero preserves the default retry behavior. To change the timeout after
+	// connecting, use SetMessageRetryTimeout.
+	MessageRetryTimeout  time.Duration
+	messageRetryOverride atomic.Pointer[time.Duration]
 
 	messageSendLock sync.Mutex
 
@@ -456,6 +458,12 @@ func (cli *Client) SetWebsocketHTTPClient(h *http.Client) {
 // This will overwrite any set proxy calls.
 func (cli *Client) SetPreLoginHTTPClient(h *http.Client) {
 	cli.preLoginHTTP = h
+}
+
+// SetMessageRetryTimeout changes the retry budget for future retries.
+// Zero restores the default retry behavior.
+func (cli *Client) SetMessageRetryTimeout(timeout time.Duration) {
+	cli.messageRetryOverride.Store(&timeout)
 }
 
 // SetMaxParallelRetryReceiptHandling sets how many retry receipts can be handled in parallel.
